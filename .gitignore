@@ -24,3 +24,9 @@ wrap_your_nif-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+
+# Zig cache
+/zig-cache/
+
+# Zig out
+/zig-out/
