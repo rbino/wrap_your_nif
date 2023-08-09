@@ -3,45 +3,79 @@ const assert = std.debug.assert;
 const beam = @import("beam.zig");
 const e = beam.e;
 
-pub fn add_two_ints(env: beam.Env, argc: c_int, argv: [*c]const beam.Term) callconv(.C) beam.Term {
-    assert(argc == 2);
+pub const add_two_ints = make_nif_wrapper(add_two_ints_impl);
 
-    // Convert to a slice to leverage Zig out of bound checks
-    const argv_slice = @as([*]const beam.Term, @ptrCast(argv))[0..@intCast(argc)];
-
-    const a = beam.get_u32(env, argv_slice[0]) catch {
-        return beam.raise_badarg(env);
-    };
-
-    const b = beam.get_u32(env, argv_slice[1]) catch {
-        return beam.raise_badarg(env);
-    };
-
+fn add_two_ints_impl(env: beam.Env, a: u32, b: u32) beam.Term {
     const result = a + b;
 
     return beam.make_u32(env, result);
 }
 
-pub fn multiply_three_doubles(env: beam.Env, argc: c_int, argv: [*c]const beam.Term) callconv(.C) beam.Term {
-    assert(argc == 3);
+pub const multiply_three_doubles = make_nif_wrapper(multiply_three_doubles_impl);
 
-    const argv_slice = @as([*]const beam.Term, @ptrCast(argv))[0..@intCast(argc)];
-
-    const a = beam.get_f64(env, argv_slice[0]) catch {
-        return beam.raise_badarg(env);
-    };
-
-    const b = beam.get_f64(env, argv_slice[1]) catch {
-        return beam.raise_badarg(env);
-    };
-
-    const c = beam.get_f64(env, argv_slice[2]) catch {
-        return beam.raise_badarg(env);
-    };
-
+fn multiply_three_doubles_impl(env: beam.Env, a: f64, b: f64, c: f64) beam.Term {
     const result = a * b * c;
 
     return beam.make_f64(env, result);
+}
+
+const Nif = *const fn (beam.Env, argc: c_int, argv: [*c]const beam.Term) callconv(.C) beam.Term;
+
+fn make_nif_wrapper(comptime fun: anytype) Nif {
+    const Function = @TypeOf(fun);
+
+    const function_info = switch (@typeInfo(Function)) {
+        .Fn => |f| f,
+        else => @compileError("Only functions can be wrapped"),
+    };
+
+    const params = function_info.params;
+    // Env is not counted in argc, so subtract one
+    const expected_argc = params.len - 1;
+
+    return struct {
+        pub fn wrapper(
+            env: beam.Env,
+            argc: c_int,
+            argv: [*c]const beam.Term,
+        ) callconv(.C) beam.Term {
+            if (argc != expected_argc) @panic("NIF called with the wrong number of arguments");
+
+            const argv_slice = @as([*]const beam.Term, @ptrCast(argv))[0..@intCast(argc)];
+
+            // This creates a tuple with the right dimensions and types to store
+            // the arguments of the passed function type
+            var args: std.meta.ArgsTuple(Function) = undefined;
+            // Populate the args
+            inline for (&args, 0..) |*arg, arg_idx| {
+                if (arg_idx == 0) {
+                    // The first argument is the environment
+                    arg.* = env;
+                    continue;
+                }
+
+                // There is an offset between args and argv since argv doesn't
+                // contain the env
+                const argv_idx = arg_idx - 1;
+                // For all the other arguments, extract them based on their type
+                const ArgType = @TypeOf(arg.*);
+                arg.* = get_arg_from_term(ArgType, env, argv_slice[argv_idx]) catch
+                    return beam.raise_badarg(env);
+            }
+
+            return @call(.auto, fun, args);
+        }
+    }.wrapper;
+}
+
+fn get_arg_from_term(comptime T: type, env: beam.Env, term: beam.Term) !T {
+    // These are what we currently need, the need to add new types to the switch will be caught
+    // by the compileError below
+    return switch (T) {
+        u32 => try beam.get_u32(env, term),
+        f64 => try beam.get_f64(env, term),
+        else => @compileError("Type " ++ @typeName(T) ++ " is not handled by get_arg_from_term"),
+    };
 }
 
 // NIF initialization boilerplate below
