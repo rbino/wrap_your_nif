@@ -20,7 +20,7 @@ pub fn get_f64(env: Env, term: Term) !f64 {
 }
 
 pub fn make_u32(env: Env, value: u32) Term {
-    return e.enif_make_int(env, @intCast(value));
+    return e.enif_make_uint(env, @intCast(value));
 }
 
 pub fn make_f64(env: Env, value: f64) Term {
